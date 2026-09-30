@@ -1,114 +1,74 @@
-# Warthog SLAM Workspace
+# Quantifying the Cost of Missing Per-Point Timestamps in Simulated LiDAR
 
-**Comparative Evaluation of Fast-LIO2 vs LIO-SAM for Heterogeneous Multi-Robot SLAM using ROS2 Humble**
+A comparative evaluation of **Fast-LIO2**, **Point-LIO**, **LIO-SAM** and **KISS-ICP** in ROS 2 Humble.
 
-This repository contains the ROS2 workspace. The project deploys two Clearpath robots — a **Husky A200** (indoor warehouse) and a **Warthog W200** (outdoor farm) — in Gazebo simulation, with each robot running a different LiDAR-Inertial SLAM algorithm for comparative evaluation.
-
-| Robot | Environment | SLAM Algorithm | Status |
-|-------|-------------|----------------|--------|
-| Clearpath Husky A200 | Indoor Warehouse | Fast-LIO2 |  Validated |
-| Clearpath Warthog W200 | Outdoor Farm | LIO-SAM |  Validated |
+Undergraduate thesis — Chea Vitou (ID 6023010001)
+BSc Robotics and Automation Engineering, Cambodia University of Technology and Science, 2026
 
 ---
 
-## Table of Contents
+## What this measures
 
-- [System Requirements](#system-requirements)
-- [Repository Structure](#repository-structure)
-- [Installation](#installation)
-- [Running the Simulation](#running-the-simulation)
-- [Running Fast-LIO2 on Husky](#running-fast-lio2-on-husky)
-- [Running LIO-SAM on Warthog](#running-lio-sam-on-warthog)
-- [Running Both Robots Together](#running-both-robots-together)
-- [Tuning Parameters](#tuning-parameters)
-- [Known Issues](#known-issues)
-- [Author](#author)
+The Ignition Gazebo lidar sensor publishes `PointCloud2` messages containing `x`, `y`, `z`, `intensity` and `ring` — but **no per-point `time` field**. Physical LiDAR drivers supply that field, and SLAM algorithms use it to deskew scans, correcting for the robot's motion during the ~50 ms a sweep takes to complete.
 
----
+The omission is already known to the Gazebo community ([gz-sensors #507](https://github.com/gazebosim/gz-sensors/issues/507)). What was not known is what it costs.
 
-## System Requirements
+This repository contains the framework used to measure that. Each algorithm runs twice over an identical route on a Clearpath Husky A200 in a simulated warehouse:
 
-- **OS:** Ubuntu 22.04 LTS
-- **ROS2:** Humble Hawksbill
-- **Gazebo:** Ignition Fortress (ign-gazebo 6)
-- **GPU:** Any GPU supporting OpenGL 4.0+ (required for Ignition rendering)
-- **RAM:** 8GB minimum, 16GB recommended
-- **Disk:** ~5GB for workspace and dependencies
+| Condition | Topic |
+|---|---|
+| **Raw** | `/a200_0001/sensors/lidar3d_0/points` — no `time` field |
+| **Reconstructed** | `/a200_0001/sensors/lidar3d_0/points_timed` — timing added by `cloud_timestamper.py` |
+
+The difference between an algorithm's two runs is what the missing field costs it.
 
 ---
 
-## Repository Structure
+## Results
+
+Absolute Trajectory Error, RMSE in metres. Route: three laps of a 2×3 m rectangle, 37.8 m total, 12 turns, 0.2 m/s.
+
+| Algorithm | Raw | Reconstructed | Factor |
+|---|---|---|---|
+| LIO-SAM | 0.007 | 0.011 | — |
+| KISS-ICP | 0.051 | 0.056 | — |
+| Point-LIO | 0.953 | **0.005** | 191× |
+| Fast-LIO2 | 17.756 | **0.021** | 846× |
+
+Relative Position Error over 1 m segments agrees with ATE on every cell.
+
+**The cost ranges from nothing to a factor of 846, and architecture does not predict it.** Three of the four algorithms are IMU-coupled; two are devastated by the missing field and one is untouched.
+
+- **KISS-ICP** uses no IMU and performs its own motion compensation, so it should be indifferent to the field. It is. This is the control.
+- **LIO-SAM** is unaffected here despite being IMU-coupled. It reads the `ring` field, which this sensor supplies, and appears to take a code path that does not require `time`.
+- **Point-LIO** and **Fast-LIO2** fail in different ways. Point-LIO stays approximately correct but becomes extremely noisy. Fast-LIO2 produces a smooth trajectory that is grossly wrong, consistent with registration errors compounding through its own map.
+
+### Note on an earlier phase
+
+An earlier phase of this project used a Clearpath Warthog W200 in an outdoor environment. On that robot the sensor supplied **neither** `time` **nor** `ring`, and LIO-SAM was unusable — 21.9 m of reported displacement over 20 s with the robot stationary. The contrast between the two robots is what suggests `ring` rather than `time` is the field LIO-SAM actually depends on. That remains an inference, not a controlled result; see Future Work.
+
+---
+
+## Repository contents
 
 ```
-warthog-slam-ws/
-└── src/
-    ├── FAST_LIO/               # Fast-LIO2 SLAM algorithm (ROS2)
-    ├── LIO-SAM/                # LIO-SAM SLAM algorithm (ROS2 branch)
-    ├── livox_ros_driver2/      # Livox LiDAR driver (Fast-LIO2 dependency)
-    ├── Livox-SDK2/             # Livox SDK (Fast-LIO2 dependency)
-    ├── husky_description/      # Clearpath Husky A200 URDF
-    ├── warthog_description/    # Clearpath Warthog W200 URDF with VLP-16 LiDAR
-    └── warthog_gazebo/         # Launch files and Gazebo worlds
-        ├── launch/
-        │   ├── multi_robot_warehouse.launch.py   # Husky + Warthog in warehouse
-        │   ├── warthog_outdoor_liosam.launch.py  # Warthog in outdoor farm world
-        │   └── warthog_warehouse.launch.py       # Warthog only in warehouse
-        └── worlds/
-            └── outdoor_farm.sdf                  # Custom outdoor farm world
+src/
+  FAST_LIO/              Fast-LIO2, Husky config
+  point_lio_ros2/        Point-LIO (ROS 2 port), Husky config
+  LIO-SAM/               LIO-SAM (ros2 branch), Husky config
+  kiss-icp/              KISS-ICP
+  cloud_tools/
+    cloud_timestamper.py Reconstructs per-point timing from azimuth
+    gt_pose.py           Extracts world-frame ground truth from Gazebo
+    route_driver.py      Drives a fixed, calibrated route
+bags/                    Recorded trajectories
 ```
 
 ---
 
-## Installation
+## Setup
 
-### 1. Install ROS2 Humble
-
-Follow the official ROS2 Humble installation guide:
-```bash
-https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html
-```
-
-Add to your `.bashrc`:
-```bash
-echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
-source ~/.bashrc
-```
-
-### 2. Install Clearpath Robot Packages
-
-```bash
-sudo apt install ros-humble-clearpath-desktop
-sudo apt install ros-humble-clearpath-simulator
-```
-
-### 3. Install LIO-SAM Dependencies
-
-```bash
-sudo add-apt-repository ppa:borglab/gtsam-release-4.1
-sudo apt update
-sudo apt install -y libgtsam-dev libgtsam-unstable-dev \
-  ros-humble-perception-pcl \
-  ros-humble-pcl-msgs \
-  ros-humble-vision-opencv
-```
-
-### 4. Install Fast-LIO2 Dependencies
-
-```bash
-sudo apt install -y ros-humble-tf2-sensor-msgs \
-  ros-humble-tf2-geometry-msgs \
-  ros-humble-nav-msgs
-```
-
-### 5. Clone This Repository
-
-```bash
-mkdir -p ~/warthog_ws
-cd ~/warthog_ws
-git clone https://github.com/VitouV2/warthog-slam-ws.git .
-```
-
-### 6. Build the Workspace
+Ubuntu 22.04, ROS 2 Humble, Ignition Gazebo Fortress.
 
 ```bash
 cd ~/warthog_ws
@@ -116,183 +76,106 @@ colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 ```
 
-> **Note:** Add `source ~/warthog_ws/install/setup.bash` to your `.bashrc` so you don't need to source it every time.
-
----
-
-## Running the Simulation
-
-### Multi-Robot Warehouse (Husky + Warthog)
+**KISS-ICP build note.** It requires CMake ≥ 3.24 while Ubuntu 22.04 ships 3.22. Installing a newer CMake via pip may overshoot — 4.x rejects a bundled Sophus dependency for declaring too *low* a minimum. This works:
 
 ```bash
-ros2 launch warthog_gazebo multi_robot_warehouse.launch.py
-```
-
-This spawns:
-- **Husky A200** at `x=5, y=0` under namespace `/a200_0001`
-- **Warthog W200** at `x=-5, y=0` under namespace `/w200_0001`
-
-### Warthog Outdoor Farm World (Single Robot)
-
-```bash
-ros2 launch warthog_gazebo warthog_outdoor_liosam.launch.py
-```
-
-This spawns the Warthog at `x=-30, y=0` in the custom outdoor farm world with:
-- Barn, water tank, 4 trees, 4 fence posts, and a shed
-- VLP-16 LiDAR publishing to `/warthog/lidar/points/points`
-- IMU publishing to `/warthog/imu/data`
-
----
-
-## Running Fast-LIO2 on Husky
-
-**Terminal 1 — Launch simulation:**
-```bash
-ros2 launch warthog_gazebo multi_robot_warehouse.launch.py
-```
-
-**Terminal 2 — Launch Fast-LIO2:**
-```bash
-cd ~/warthog_ws && source install/setup.bash
-ros2 launch fast_lio mapping_avia.launch.py
-```
-
-**Terminal 3 — Drive Husky:**
-```bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard \
-  --ros-args --remap cmd_vel:=/a200_0001/cmd_vel
-```
-
-**Verify mapping:**
-```bash
-ros2 topic hz /cloud_registered
+colcon build --packages-select kiss_icp \
+  --cmake-args -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 ```
 
 ---
 
-## Running LIO-SAM on Warthog
+## Running an experiment
 
-**Terminal 1 — Launch outdoor farm simulation:**
+Three nodes stay up for the whole session:
+
 ```bash
-ros2 launch warthog_gazebo warthog_outdoor_liosam.launch.py
+# 1. Simulation — then press PLAY in the Gazebo window
+ros2 launch clearpath_gz simulation.launch.py
+
+# 2. Timestamp reconstruction
+python3 src/cloud_tools/cloud_timestamper.py --ros-args \
+  -p use_sim_time:=true -p reverse:=true \
+  -p input_topic:=/a200_0001/sensors/lidar3d_0/points \
+  -p output_topic:=/a200_0001/sensors/lidar3d_0/points_timed
+
+# 3. Ground truth
+ros2 run ros_gz_bridge parameter_bridge \
+  /model/a200_0001/robot/pose@geometry_msgs/msg/PoseArray[ignition.msgs.Pose_V &
+python3 src/cloud_tools/gt_pose.py --ros-args -p use_sim_time:=true -p index:=5
 ```
 
-Wait until Gazebo is fully loaded and `/clock` is publishing:
-```bash
-ros2 topic hz /clock   # Should show ~1000 Hz
-```
+Index 5 is the model root in the world frame. Earlier entries in the pose array are the four wheels in robot-local coordinates and are **not** usable as ground truth.
 
-**Terminal 2 — Launch LIO-SAM:**
-```bash
-cd ~/warthog_ws && source install/setup.bash
-ros2 launch lio_sam run.launch.py
-```
+Then launch one algorithm:
 
-**Terminal 3 — Drive Warthog:**
-```bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard \
-  --ros-args --remap cmd_vel:=/w200_0001/cmd_vel
-```
+| Algorithm | Launch | Odometry topic | Node |
+|---|---|---|---|
+| Fast-LIO2 | `ros2 launch fast_lio mapping.launch.py config_file:=husky_vlp16.yaml use_sim_time:=true` | `/Odometry` | `/laser_mapping` |
+| Point-LIO | `ros2 launch point_lio mapping_velody16.launch.py` | `/aft_mapped_to_init` | `/laserMapping` |
+| LIO-SAM | `ros2 launch lio_sam run.launch.py` | `/lio_sam/mapping/odometry` | `/lio_sam_imageProjection` |
+| KISS-ICP | `ros2 launch kiss_icp odometry.launch.py topic:=<TOPIC> visualize:=false` | `/kiss/odometry` | — |
 
-**Verify mapping:**
-```bash
-ros2 topic hz /lio_sam/mapping/odometry   # Should show ~5 Hz
-```
+Record, drive, evaluate:
 
-**RViz2 — View the map:**
-- Set **Fixed Frame** to `odom`
-- Add `PointCloud2` → topic: `/lio_sam/mapping/cloud_registered`
-- Add `Path` → topic: `/lio_sam/mapping/path`
-
-**Save the map:**
 ```bash
-ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap \
-  "{resolution: 0.1, destination: '/home/$USER/warthog_ws/liosam_map'}"
+cd bags
+ros2 bag record <ALGO_ODOM> /ground_truth/odom /clock -o <name>
+# wait for "All requested topics are subscribed", then:
+python3 ../src/cloud_tools/route_driver.py --ros-args \
+  -p use_sim_time:=true -p route:=lap3
+
+evo_ape bag2 <name> /ground_truth/odom <ALGO_ODOM> --align
+evo_rpe bag2 <name> /ground_truth/odom <ALGO_ODOM> --delta 1.0 --delta_unit m --align
 ```
 
 ---
 
-## Running Both Robots Together
+## Things that cost me time
 
-```bash
-# Terminal 1 — Gazebo
-ros2 launch warthog_gazebo multi_robot_warehouse.launch.py
+Documented here because several fail **silently** rather than producing an error.
 
-# Terminal 2 — Fast-LIO2 on Husky
-ros2 launch fast_lio mapping_avia.launch.py
+**Verify topics before recording.** `ros2 bag record` does not error on a topic that does not exist yet — it waits, and you get an empty bag. Always check `ros2 topic hz` on both the algorithm output and ground truth first.
 
-# Terminal 3 — Drive Husky
-ros2 run teleop_twist_keyboard teleop_twist_keyboard \
-  --ros-args --remap cmd_vel:=/a200_0001/cmd_vel
+**`ros2 param get` is the only reliable check.** After editing a config: rebuild if needed, **kill the node**, relaunch, then confirm with `ros2 param get <node> <key>`. A running node keeps its loaded parameters regardless of what is on disk.
 
-# Terminal 4 — Drive Warthog
-ros2 run teleop_twist_keyboard teleop_twist_keyboard \
-  --ros-args --remap cmd_vel:=/w200_0001/cmd_vel
-```
+**Fast-LIO2 and Point-LIO copy their configs at build time.** Editing the file under `src/` does nothing until you `colcon build`. LIO-SAM's config is symlinked; KISS-ICP takes its topic as a launch argument.
+
+**YAML failures are silent.** A tab instead of spaces, a stray `#`, or a duplicate key later in the file will cause the parser to drop that key. The algorithm then falls back to a built-in default topic, subscribes to nothing, and publishes nothing — with no error anywhere.
+
+**Sort the reconstructed cloud by timestamp.** Ignition emits points grouped by beam, not in sweep order. Downstream code reads the sweep duration from the *last* array element, so an unsorted output reports roughly half the true duration — which is worse than supplying no timing at all.
+
+**Calibrate open-loop motion.** Commanded durations fall short through actuator ramp-up. Measured against ground truth: a 90° turn at 0.3 rad/s achieved 87.3°, and 2 m commanded at 0.2 m/s achieved 1.62 m. Uncalibrated, the rectangular route ended 2.56 m from its start; calibrated, it closes within 0.04 m.
 
 ---
 
-## Tuning Parameters
+## Limitations
 
-### Fast-LIO2 (`src/FAST_LIO/config/`)
+- Each cell is a **single run**. No confidence intervals.
+- One robot, one environment, a 37.8 m route at 0.2 m/s.
+- The reconstruction infers timing from azimuth assuming constant rotation rate and one sweep per message. Both hold in simulation; neither is guaranteed on hardware.
+- LIO-SAM publishes at ~6 Hz against 49–80 Hz for the others, so its error figures come from a sparser trajectory and are not directly comparable.
+- The explanation for the two failure modes is inferred from behaviour, not demonstrated by controlled test.
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| `lidar_type` | 1 | Velodyne VLP-16 |
-| `N_SCAN` | 16 | Number of LiDAR channels |
-| `blind` | 0.5 | Minimum LiDAR range (m) |
+## Future work
 
-### LIO-SAM (`src/LIO-SAM/config/params.yaml`)
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| `pointCloudTopic` | `/warthog/lidar/points/points` | LiDAR input topic |
-| `imuTopic` | `/warthog/imu/data` | IMU input topic |
-| `lidarFrame` | `vlp16_link` | LiDAR TF frame |
-| `N_SCAN` | 16 | LiDAR channels |
-| `use_sim_time` | `true` | Must be true for Gazebo |
-| `extrinsicTrans` | `[0, 0, 0.525]` | LiDAR height above base_link |
-
-> **Important:** Always launch Gazebo first and wait for a stable `/clock` before launching LIO-SAM. Launching LIO-SAM before Gazebo causes a TF time jump error that prevents the map from initializing.
+1. **Isolate the `ring` field** — supply `time` while withholding `ring`, and run LIO-SAM against it. This converts the strongest inference here into a measured result.
+2. **Test the map-corruption hypothesis** — run Fast-LIO2 raw on a straight-line route. Minimal turning should mean minimal smearing and a much smaller error.
+3. **Repeat each cell** for confidence intervals. The automated route driver makes repeat runs genuinely comparable.
+4. **Vary speed and environment.** Scan distortion scales with velocity.
+5. **Validate on hardware**, where a physical Velodyne supplies both fields.
+6. **Contribute upstream** to [gz-sensors #507](https://github.com/gazebosim/gz-sensors/issues/507).
 
 ---
 
-## Known Issues
+## References
 
-**1. LIO-SAM `imuPreintegration` shows as duplicate in `ros2 node list`**
-This is a DDS ghost node registration from previous crashed sessions. Check actual process count with:
-```bash
-ps aux | grep lio_sam_imu | grep -v grep
-```
-If only 1 process exists, the system is fine — the duplicate is harmless.
+- Xu et al., *Fast-LIO2: Fast Direct LiDAR-Inertial Odometry*, IEEE T-RO 2022
+- He et al., *Point-LIO: Robust High-Bandwidth LiDAR-Inertial Odometry*, Adv. Intell. Syst. 2023
+- Shan et al., *LIO-SAM: Tightly-Coupled LiDAR Inertial Odometry via Smoothing and Mapping*, IROS 2020
+- Vizzo et al., *KISS-ICP: In Defense of Point-to-Point ICP*, IEEE RA-L 2023
+- Grupp, *evo: Python package for the evaluation of odometry and SLAM*, 2017
 
-**2. `Frame [map] does not exist` in RViz2**
-The `map` frame is only created after the robot moves. Drive the robot first, then set Fixed Frame to `odom` in RViz2.
+## Acknowledgements
 
-**3. LIO-SAM `Not enough features` warning**
-This occurs in feature-sparse environments (flat warehouse floors, long corridors). This is an expected finding — LIO-SAM performs better in outdoor environments with varied geometry. Lower the thresholds in `params.yaml`:
-```yaml
-edgeFeatureMinValidNum: 3
-surfFeatureMinValidNum: 30
-```
-
-**4. Gazebo segfault on world load**
-Too many objects in the SDF world exceed GPU memory. Reduce the number of models or use simpler geometry. The `outdoor_farm.sdf` world is already optimized to stay within typical GPU limits.
-
-**5. Point cloud timestamp not available**
-LIO-SAM deskewing is disabled when the point cloud has no per-point timestamps. This causes increased drift. The system still maps but with reduced accuracy — this is a known Ignition Gazebo limitation for the lidar sensor type.
-
----
-
-## Author
-
-**Chea Vitou** (cheavitou30@gmail.com)
-Bachelor of Science in Robotics and Automation Engineering
-
-
-Supervisors: Dr. YongAnn Voeurn
-
----
-
-*This project is part of a thesis comparing Fast-LIO2 and LIO-SAM for multi-robot SLAM in ROS2 Humble simulation.*
+Supervised by Dr. Doyun Lee (project supervisor), Mr. Prum Lipheng (CamTech mentor) and Mr. Mel Sokkheng (industry supervisor, Tribal Education Group).
