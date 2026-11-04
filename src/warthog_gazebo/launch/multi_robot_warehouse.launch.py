@@ -1,5 +1,7 @@
+import os
 import re
 import subprocess
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.substitutions import PathJoinSubstitution, Command
 from launch.actions import IncludeLaunchDescription
@@ -27,10 +29,12 @@ def generate_launch_description():
         value_type=str
     )
 
-    # Husky URDF - use Clearpath generated URDF with proper sensors
+    # Husky URDF - Clearpath generated URDF with proper sensors, kept in this
+    # package (urdf/husky_a200.urdf.xacro) so its edits are versioned
     husky_urdf_raw = subprocess.check_output([
         'xacro',
-        '/home/v2/clearpath_a200/robot.urdf.xacro',
+        os.path.join(get_package_share_directory('warthog_gazebo'),
+                     'urdf', 'husky_a200.urdf.xacro'),
         'is_sim:=true'
     ]).decode('utf-8')
     # Strip ros2_control hardware plugin to avoid crash
