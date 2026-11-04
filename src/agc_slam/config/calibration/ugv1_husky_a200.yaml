@@ -1,0 +1,122 @@
+# ============================================================================
+# Air-Ground Collaborative Mapping -- extrinsic calibration
+# Robot : ugv1  (Clearpath Husky A200, serial a200-0001)
+# Owner : C. Vitou                     Gate: G1 (Nov 18, 2026)
+# ----------------------------------------------------------------------------
+# Every sensor pose is stored relative to base_link. Sensor-to-sensor
+# transforms are DERIVED from these (see agc_slam.transforms.Calibration),
+# so each sensor has exactly one source of truth and the chains can never
+# disagree with each other.
+#
+# Convention: xyz in metres, rpy in radians, fixed-axis ROS/URDF RPY
+# (R = Rz(yaw) @ Ry(pitch) @ Rx(roll)), i.e. the pose of the sensor frame
+# expressed in base_link. This matches <origin> in a URDF joint.
+#
+# SOURCE OF THESE NUMBERS -- read before trusting them in the field:
+#   source: simulation URDF chain (exact, not estimated)
+#   The Husky is described by ~/clearpath/robot.yaml -> robot.urdf.xacro.
+#   Values were produced by composing the fixed-joint chain from base_link
+#   to each sensor frame, then cross-checked against the independent
+#   tf2_echo capture in ~/calib_ground_truth.txt (July 2026):
+#     lidar3d_0_laser -> camera_0_color_optical_frame
+#       tf2_echo : xyz [0.136, 0.251, -0.353]  rpy [-1.571, 0, 0]
+#       URDF     : xyz [0.136, 0.251, -0.353]  rpy [-1.571, 0, 0]
+#   The two agree to < 1 mm, and the residual between camera_0_link and
+#   camera_0_color_optical_frame is the standard REP-103 optical rotation
+#   plus the D435's 14.75 mm colour-sensor offset -- as expected.
+#
+# STATUS: SIM-EXACT, NOT YET FIELD-MEASURED.
+#   The physical Husky currently carries no camera, so the camera entries
+#   below are only valid for simulation. Before the P4 field runs these must
+#   be re-measured on hardware with a ChArUco target
+#   (see ~/charuco_calib.py, ~/CameraCali.py) and this file replaced.
+#   The lidar and imu entries are mechanical mount values and should hold on
+#   hardware to within a few mm.
+# ============================================================================
+
+robot: ugv1
+base_frame: base_link
+platform: clearpath_a200
+serial_number: a200-0001
+
+metadata:
+  source: urdf_chain_simulation
+  validated_against: calib_ground_truth.txt (tf2_echo, 2026-07-13)
+  field_measured: false
+  date: 2026-10-28
+  author: C. Vitou
+
+sensors:
+
+  # Velodyne VLP-16 on the 300 mm sensor arch, +0.1 m on its mount.
+  # Chain: base_link -> default_mount -> sensor_arch_link
+  #        -> sensor_arch_mount -> lidar3d_0_link -> lidar3d_0_laser
+  lidar:
+    frame_id: lidar3d_0_laser
+    xyz: [0.0, 0.0, 0.6617]
+    rpy: [0.0, 0.0, 0.0]
+    model: velodyne_vlp16
+    topic: /a200_0001/sensors/lidar3d_0/points_timed
+
+  # Microstrain IMU, same sensor arch mount as the lidar.
+  # Chain: base_link -> ... -> sensor_arch_mount -> imu_0_base_link -> imu_0_link
+  imu:
+    frame_id: imu_0_link
+    xyz: [0.0, 0.0, 0.5265]
+    rpy: [0.0, 0.0, 0.0]
+    model: microstrain_imu
+    rate_hz: 400
+    topic: /a200_0001/sensors/imu_0/data
+
+  # Intel RealSense D435 on a fath_pivot at top_plate_mount_a3 (front-left),
+  # yawed +90 deg so the camera faces left. SIM ONLY -- see STATUS above.
+  camera:
+    frame_id: camera_0_link
+    xyz: [0.15075, 0.2506, 0.30885]
+    rpy: [0.0, 0.0, 1.5708]
+    model: intel_realsense_d435
+
+  # Colour optical frame -- this is the one to use for projecting points into
+  # the image (REP-103 optical convention: x right, y down, z forward).
+  camera_optical:
+    frame_id: camera_0_color_optical_frame
+    xyz: [0.136, 0.251, 0.3087]
+    rpy: [-1.5708, 0.0, 0.0]
+    model: intel_realsense_d435
+
+# ----------------------------------------------------------------------------
+# Derived transforms, recorded here for review only. They are NOT read by any
+# code -- agc_slam.transforms.Calibration recomputes them from the entries
+# above. Regenerate with: ros2 run agc_slam slam_interface --print-calibration
+# ----------------------------------------------------------------------------
+derived_for_reference:
+  # What FAST-LIO2 / Point-LIO want as mapping.extrinsic_T / extrinsic_R
+  # (the pose of the lidar in the IMU frame).
+  T_imu_lidar:
+    xyz: [0.0, 0.0, 0.1352]
+    rpy: [0.0, 0.0, 0.0]
+    note: >
+      The committed FAST-LIO2 config used [0, 0, 0.1] here, which is the
+      lidar's offset on its own mount rather than its offset from the IMU.
+      That is a 35.2 mm error; corrected in config/ugv1_fastlio2.yaml.
+  # For colourising the map cloud in P2 (FAST-LIVO2 / colorize_map.py).
+  T_lidar_camera_optical:
+    xyz: [0.136, 0.251, -0.353]
+    rpy: [-1.5708, 0.0, 0.0]
+
+# ----------------------------------------------------------------------------
+# D435 colour intrinsics as configured in robot.yaml (1280x720 @ 30 fps).
+# Simulation pinhole values; re-measure on hardware alongside the extrinsics.
+# ----------------------------------------------------------------------------
+camera_intrinsics:
+  width: 1280
+  height: 720
+  distortion_model: plumb_bob
+  distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
+  field_measured: false
+  note: >
+    Gazebo renders an ideal pinhole, so K must be taken from the live
+    /camera_0/color/camera_info rather than assumed. Capture it into this
+    file during the P1 dataset recording; left empty on purpose so nobody
+    silently uses a wrong K.
+  K: []

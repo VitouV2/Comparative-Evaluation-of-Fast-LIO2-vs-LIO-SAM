@@ -1,0 +1,74 @@
+# ============================================================================
+# FAST-LIO2 backend parameters -- robot ugv1 (Husky A200), simulation
+# Air-Ground Collaborative Mapping / SLAM module (C. Vitou)
+#
+# These are the BACKEND's own parameters. FAST-LIO2 keeps publishing on its
+# private topics (/Odometry, /cloud_registered) in its private frames
+# (camera_init, body); agc_slam's slam_interface node adapts that onto the
+# frozen team interface. Do not rename things here to match the interface --
+# that is the interface node's job, and keeping upstream untouched is what
+# lets us swap in Point-LIO / LIO-SAM / FAST-LIVO2 for the P2 benchmark.
+# ============================================================================
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 1
+        max_iteration: 3
+        filter_size_surf: 0.5
+        filter_size_map: 0.5
+        cube_side_length: 1000.0
+        runtime_pos_log_enable: false
+        map_file_path: ""        # map_cloud is published live; see pcd_save below
+
+        common:
+            lid_topic: "/a200_0001/sensors/lidar3d_0/points_timed"
+            imu_topic: "/a200_0001/sensors/imu_0/data"
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 2        # 2 = Velodyne
+            scan_line: 16        # VLP-16
+            scan_rate: 46
+            timestamp_unit: 0
+            blind: 0.5
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree: 360.0
+            det_range: 50.0
+            extrinsic_est_en: false
+
+            # Pose of the lidar in the IMU frame (T_imu_lidar).
+            #
+            # CORRECTED 2026-10-28. The previous value was [0, 0, 0.1], which
+            # is the lidar's offset on its own mount (robot.yaml: lidar3d_0
+            # xyz [0, 0, 0.1] on sensor_arch_mount) -- not its offset from the
+            # IMU, which is what FAST-LIO2 asks for here. Both sensors sit on
+            # sensor_arch_mount, so from the URDF chain:
+            #     base_link -> lidar3d_0_laser : z = 0.6617
+            #     base_link -> imu_0_link      : z = 0.5265
+            #     T_imu_lidar                  : z = 0.1352
+            # The old value understated the lever arm by 35.2 mm, which biases
+            # the IMU-to-lidar motion compensation under rotation.
+            # Single source of truth: config/calibration/ugv1_husky_a200.yaml
+            extrinsic_T: [0.0, 0.0, 0.1352]
+            extrinsic_R: [1.0, 0.0, 0.0,
+                          0.0, 1.0, 0.0,
+                          0.0, 0.0, 1.0]
+
+        publish:
+            path_en: true
+            scan_publish_en: true          # /cloud_registered -> interface node
+            dense_publish_en: true
+            scan_bodyframe_pub_en: false   # unused downstream; saves bandwidth
+
+        pcd_save:
+            # Off by default: the interface node publishes map_cloud live, and
+            # leaving this on writes a growing PCD every run. Turn it on for
+            # the P2 benchmark when an offline cloud is wanted.
+            pcd_save_en: false
+            interval: -1
