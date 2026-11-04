@@ -31,6 +31,7 @@ setup(
             'slam_interface = agc_slam.slam_interface:main',
 
             'check_frames = agc_slam.frame_check:main',
+            'plot_path_vs_truth = agc_slam.path_eval:main',
         ],
     },
 )
