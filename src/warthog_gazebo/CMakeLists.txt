@@ -3,8 +3,8 @@ project(warthog_gazebo)
 
 find_package(ament_cmake REQUIRED)
 
-# Install launch files only (no worlds folder needed)
-install(DIRECTORY launch
+# Install launch files and the Husky description (no worlds folder needed)
+install(DIRECTORY launch urdf
   DESTINATION share/${PROJECT_NAME}
 )
 
